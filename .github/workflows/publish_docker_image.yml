@@ -7,8 +7,45 @@ on:
   workflow_dispatch:
 
 jobs:
+  validate:
+    name: Build, vet, tests and race detector
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: evogo_test
+          POSTGRES_PASSWORD: evogo_test
+          POSTGRES_DB: evogo_test_auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U evogo_test -d evogo_test_auth"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CGO_ENABLED: "1"
+      EVOGO_TEST_POSTGRES_DSN: postgresql://evogo_test:evogo_test@localhost:5432/evogo_test_auth?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+      - name: Native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libjpeg-dev libwebp-dev
+      - name: Verify dependencies
+        run: go mod verify
+      - name: Compile all packages
+        run: go build ./...
+      - name: Vet all packages
+        run: go vet ./...
+      - name: Test all packages
+        run: go test -count=1 ./...
+      - name: Test all packages with race detector
+        run: go test -race -count=1 ./...
+
   build_deploy:
-    name: Build and Deploy
+    name: Build, smoke test and publish image
+    needs: validate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,7 +67,8 @@ jobs:
           images: ghcr.io/mrvrielink/evolution-go
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=latest,enable=${{ !contains(steps.version.outputs.version, '-beta') }}
+            type=raw,value=latest,enable=${{ !contains(steps.version.outputs.version, '-') }}
+            type=sha,prefix=sha-
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -44,6 +82,53 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: evogo-smoke:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: VERSION=${{ steps.version.outputs.version }}
+
+      - name: Smoke test container and restart with isolated databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create evogo-smoke
+          docker run -d --name evogo-smoke-db --network evogo-smoke \
+            -e POSTGRES_USER=evogo_test -e POSTGRES_PASSWORD=evogo_test -e POSTGRES_DB=evogo_test \
+            postgres:15-alpine
+          for i in {1..30}; do
+            if docker exec evogo-smoke-db pg_isready -U evogo_test -d evogo_test; then break; fi
+            sleep 2
+          done
+          docker exec evogo-smoke-db pg_isready -U evogo_test -d evogo_test
+          docker run -d --name evogo-smoke-app --network evogo-smoke -p 127.0.0.1:18080:8080 \
+            -e SERVER_PORT=8080 -e GLOBAL_API_KEY=evogo-smoke-only \
+            -e POSTGRES_USERS_DB='postgresql://evogo_test:evogo_test@evogo-smoke-db:5432/evogo_test?sslmode=disable' \
+            -e POSTGRES_AUTH_DB='postgresql://evogo_test:evogo_test@evogo-smoke-db:5432/evogo_test?sslmode=disable' \
+            -e CONNECT_ON_STARTUP=false -e LOGTYPE=console \
+            -v evogo-smoke-data:/app/dbdata evogo-smoke:${{ github.sha }}
+          wait_for_app() {
+            for i in {1..45}; do
+              if curl -fsS http://127.0.0.1:18080/server/ok | grep -q '"status":"ok"'; then
+                curl -fsS http://127.0.0.1:18080/manager | grep -q '<html'
+                curl -fsS http://127.0.0.1:18080/license/status | grep -q '"status"'
+                return 0
+              fi
+              sleep 2
+            done
+            docker logs evogo-smoke-app
+            return 1
+          }
+          wait_for_app
+          docker restart evogo-smoke-app
+          wait_for_app
+          docker logs evogo-smoke-app
 
       - name: Build and push
         id: docker_build

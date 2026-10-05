@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolution-foundation/evolution-go/pkg/safemap"
 	"io"
 	"net/http"
 	"time"
@@ -40,7 +41,7 @@ type UserService interface {
 }
 
 type userService struct {
-	clientPointer    map[string]*whatsmeow.Client
+	clientPointer    *safemap.Map[*whatsmeow.Client]
 	whatsmeowService whatsmeow_service.WhatsmeowService
 	loggerWrapper    *logger_wrapper.LoggerManager
 }
@@ -124,7 +125,7 @@ func (u *userService) ensureClientConnectedCtx(ctx context.Context, instanceId s
 		ctx = context.Background()
 	}
 
-	client := u.clientPointer[instanceId]
+	client := u.clientPointer.Get(instanceId)
 	u.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] Checking client connection status - Client exists: %v", instanceId, client != nil)
 
 	if client == nil {
@@ -158,7 +159,7 @@ func (u *userService) waitForClientReady(ctx context.Context, instanceId string,
 	defer ticker.Stop()
 
 	for {
-		client := u.clientPointer[instanceId]
+		client := u.clientPointer.Get(instanceId)
 		if client != nil && client.IsConnected() {
 			return client, nil
 		}
@@ -514,7 +515,7 @@ func (u *userService) GetBlockList(instance *instance_model.Instance) (*types.Bl
 		return nil, err
 	}
 
-	resp, err := client.GetBlocklist(context.Background())
+	resp, err := client.GetBlocklist(context.Background(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +570,7 @@ func (u *userService) SetProfileStatus(data *SetProfileStatusStruct, instance *i
 		return false, err
 	}
 
-	err = client.SetStatusMessage(context.Background(), data.Status)
+	err = client.SetStatusMessage(context.Background(), types.SetStatusInput{Text: &data.Status})
 	if err != nil {
 		return false, err
 	}
@@ -578,7 +579,7 @@ func (u *userService) SetProfileStatus(data *SetProfileStatusStruct, instance *i
 }
 
 func NewUserService(
-	clientPointer map[string]*whatsmeow.Client,
+	clientPointer *safemap.Map[*whatsmeow.Client],
 	whatsmeowService whatsmeow_service.WhatsmeowService,
 	loggerWrapper *logger_wrapper.LoggerManager,
 ) UserService {

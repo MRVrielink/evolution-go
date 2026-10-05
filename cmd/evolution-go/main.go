@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"github.com/evolution-foundation/evolution-go/pkg/safemap"
 	"log"
 	"net/http"
 	"os"
@@ -83,8 +84,8 @@ func init() {
 }
 
 func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.Config, conn *amqp.Connection, exPath string, runtimeCtx *core.RuntimeContext) *gin.Engine {
-	killChannel := make(map[string](chan bool))
-	clientPointer := make(map[string]*whatsmeow.Client)
+	killChannel := safemap.New[chan bool]()
+	clientPointer := safemap.New[*whatsmeow.Client]()
 
 	loggerWrapper := logger_wrapper.NewLoggerManager(config)
 
