@@ -108,13 +108,17 @@ jobs:
           done
           docker exec evogo-smoke-db pg_isready -U evogo_test -d evogo_test
           docker run -d --name evogo-smoke-app --network evogo-smoke -p 127.0.0.1:18080:8080 \
-            -e SERVER_PORT=8080 -e GLOBAL_API_KEY=evogo-smoke-only \
+            -e SERVER_PORT=8080 -e GLOBAL_API_KEY=evogo-smoke-only -e DATABASE_SAVE_MESSAGES=false \
             -e POSTGRES_USERS_DB='postgresql://evogo_test:evogo_test@evogo-smoke-db:5432/evogo_test?sslmode=disable' \
             -e POSTGRES_AUTH_DB='postgresql://evogo_test:evogo_test@evogo-smoke-db:5432/evogo_test?sslmode=disable' \
-            -e CONNECT_ON_STARTUP=false -e LOGTYPE=console \
+            -e CONNECT_ON_STARTUP=false -e LOG_TYPE=console \
             -v evogo-smoke-data:/app/dbdata evogo-smoke:${{ github.sha }}
           wait_for_app() {
             for i in {1..45}; do
+              if [ "$(docker inspect --format '{{.State.Running}}' evogo-smoke-app)" != true ]; then
+                docker logs evogo-smoke-app
+                return 1
+              fi
               if curl -fsS http://127.0.0.1:18080/server/ok | grep -q '"status":"ok"'; then
                 curl -fsS http://127.0.0.1:18080/manager | grep -q '<html'
                 curl -fsS http://127.0.0.1:18080/license/status | grep -q '"status"'
