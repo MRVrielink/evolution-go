@@ -1137,6 +1137,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if decryptErr != nil {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Could not decrypt edit %s; forwarding encrypted envelope", mycli.userID, evt.Info.ID)
 		}
+		communityFailed, communityErr := prepareIncomingCommunityAction(context.Background(), mycli.WAClient, evt)
+		decryptFailed = decryptFailed || communityFailed
+		if communityErr != nil {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Could not decrypt community action %s; forwarding encrypted envelope", mycli.userID, evt.Info.ID)
+		}
 		senderStr := evt.Info.Sender.String()
 		senderAltStr := evt.Info.SenderAlt.String()
 		chatStr := evt.Info.Chat.String()
