@@ -159,7 +159,7 @@ func TestAvatarHTTPContextAndErrorMapping(t *testing.T) {
 				return nil, tc.err
 			}}
 			w := avatarHTTPRequest(avatarRouter(service), "token-one", `{"number":"14155550100"}`, ctx)
-			if w.Code != tc.status || strings.Contains(w.Body.String(), "private") || strings.Contains(w.Body.String(), "postgres") {
+			if w.Code != tc.status || strings.Contains(w.Body.String(), "private details") || strings.Contains(w.Body.String(), "private-password") || strings.Contains(w.Body.String(), "postgres") {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
 		})

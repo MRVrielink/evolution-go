@@ -17,6 +17,10 @@ func writeUserWAError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, user_service.ErrInvalidUserNumber):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid phone number"})
+	case errors.Is(err, whatsmeow.ErrProfilePictureNotSet):
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "no profile picture", "code": "PROFILE_PICTURE_NOT_SET"})
+	case errors.Is(err, whatsmeow.ErrProfilePictureUnauthorized):
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "profile picture is private", "code": "PROFILE_PICTURE_PRIVATE"})
 	case errors.Is(err, whatsmeow.ErrIQRateOverLimit):
 		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": "WhatsApp rate limit"})
 	case errors.Is(err, whatsmeow.ErrIQTimedOut),

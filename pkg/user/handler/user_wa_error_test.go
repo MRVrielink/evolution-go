@@ -68,3 +68,27 @@ func TestWriteUserWAError(t *testing.T) {
 		})
 	}
 }
+
+func TestAvatarUnavailableResponsesAreClassifiedWithoutPrivateDetails(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		code    string
+		message string
+	}{
+		{whatsmeow.ErrProfilePictureNotSet, "PROFILE_PICTURE_NOT_SET", "no profile picture"},
+		{whatsmeow.ErrProfilePictureUnauthorized, "PROFILE_PICTURE_PRIVATE", "profile picture is private"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			writeUserWAError(c, fmt.Errorf("postgres://private-password@host: %w", tc.err))
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusInternalServerError || body["code"] != tc.code || body["error"] != tc.message {
+				t.Fatalf("unsafe or incompatible avatar error: status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
