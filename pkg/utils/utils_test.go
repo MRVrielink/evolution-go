@@ -28,9 +28,9 @@ func TestCreateJID(t *testing.T) {
 
 		// Brazilian numbers (55)
 		{
-			name:     "BR mobile number with 9 prefix - should remove 9",
+			name:     "BR mobile number with 9 prefix - should keep 9",
 			input:    "5531987654321",
-			expected: "+553187654321@s.whatsapp.net",
+			expected: "+5531987654321@s.whatsapp.net",
 			hasError: false,
 		},
 		{
@@ -224,7 +224,7 @@ func TestFormatBRNumber(t *testing.T) {
 		{
 			name:     "BR mobile number with DDD >= 31 and 9 prefix",
 			input:    "5531987654321",
-			expected: "553187654321",
+			expected: "5531987654321",
 		},
 		{
 			name:     "BR number with DDD < 31",
@@ -284,14 +284,18 @@ func TestParseJID(t *testing.T) {
 			name:      "Valid phone number",
 			input:     "15551234567",
 			expectOk:  true,
-			expectJID: "+15551234567@s.whatsapp.net",
+			expectJID: "15551234567@s.whatsapp.net",
 		},
 		{
 			name:      "Valid BR number",
 			input:     "5531987654321",
 			expectOk:  true,
-			expectJID: "+553187654321@s.whatsapp.net",
+			expectJID: "5531987654321@s.whatsapp.net",
 		},
+		{"Plus prefix", "+15551234567", true, "15551234567@s.whatsapp.net"},
+		{"Full JID plus prefix", "+15551234567@s.whatsapp.net", true, "15551234567@s.whatsapp.net"},
+		{"Legacy BR JID", "553187654321@s.whatsapp.net", true, "553187654321@s.whatsapp.net"},
+		{"LID", "123456789012345@lid", true, "123456789012345@lid"},
 		{
 			name:      "Valid group ID",
 			input:     "120363123456789012@g.us",

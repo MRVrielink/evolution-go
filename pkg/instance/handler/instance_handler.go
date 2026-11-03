@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
 	instance_model "github.com/evolution-foundation/evolution-go/pkg/instance/model"
@@ -600,10 +601,8 @@ func (h *instanceHandler) GetLogs(c *gin.Context) {
 // @Failure 500 {object} gin.H "Internal server error"
 // @Router /instance/{instanceId}/advanced-settings [get]
 func (h *instanceHandler) GetAdvancedSettings(c *gin.Context) {
-	instanceId := c.Param("instanceId")
-
-	if instanceId == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+	instanceId, ok := advancedSettingsInstanceID(c)
+	if !ok {
 		return
 	}
 
@@ -630,10 +629,8 @@ func (h *instanceHandler) GetAdvancedSettings(c *gin.Context) {
 // @Failure 500 {object} gin.H "Internal server error"
 // @Router /instance/{instanceId}/advanced-settings [put]
 func (h *instanceHandler) UpdateAdvancedSettings(c *gin.Context) {
-	instanceId := c.Param("instanceId")
-
-	if instanceId == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+	instanceId, ok := advancedSettingsInstanceID(c)
+	if !ok {
 		return
 	}
 
@@ -657,4 +654,25 @@ func (h *instanceHandler) UpdateAdvancedSettings(c *gin.Context) {
 
 func NewInstanceHandler(instanceService instance_service.InstanceService, config *config.Config) InstanceHandler {
 	return &instanceHandler{instanceService: instanceService, config: config}
+}
+
+// Settings routes only accept the instance authenticated by middleware.
+func advancedSettingsInstanceID(c *gin.Context) (string, bool) {
+	value, exists := c.Get("instance")
+	instance, ok := value.(*instance_model.Instance)
+	if !exists || !ok || instance == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
+		return "", false
+	}
+	requested, err := uuid.Parse(c.Param("instanceId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid instanceId"})
+		return "", false
+	}
+	owner, err := uuid.Parse(instance.Id)
+	if err != nil || requested != owner {
+		c.JSON(http.StatusForbidden, gin.H{"error": "instanceId does not match authenticated instance"})
+		return "", false
+	}
+	return instance.Id, true
 }

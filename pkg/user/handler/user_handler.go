@@ -15,14 +15,16 @@ import (
 // rate-overlimit → 429; IQ/context timeout or cancel → 504; everything else → 500.
 func writeUserWAError(ctx *gin.Context, err error) {
 	switch {
+	case errors.Is(err, user_service.ErrInvalidUserNumber):
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid phone number"})
 	case errors.Is(err, whatsmeow.ErrIQRateOverLimit):
-		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": "WhatsApp rate limit"})
 	case errors.Is(err, whatsmeow.ErrIQTimedOut),
 		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, context.Canceled):
-		ctx.JSON(http.StatusGatewayTimeout, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusGatewayTimeout, gin.H{"error": "WhatsApp query timeout or cancellation"})
 	default:
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query WhatsApp"})
 	}
 }
 
@@ -141,15 +143,15 @@ func (u *userHandler) CheckUser(ctx *gin.Context) {
 // @Failure 504 {object} gin.H "WhatsApp query timeout"
 // @Router /user/avatar [post]
 func (u *userHandler) GetAvatar(ctx *gin.Context) {
-	getInstance := ctx.MustGet("instance")
+	getInstance, _ := ctx.Get("instance")
 
 	instance, ok := getInstance.(*instance_model.Instance)
-	if !ok {
+	if !ok || instance == nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
 		return
 	}
 
-	var data *user_service.GetAvatarStruct
+	var data user_service.GetAvatarStruct
 	err := ctx.ShouldBindBodyWithJSON(&data)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -166,9 +168,13 @@ func (u *userHandler) GetAvatar(ctx *gin.Context) {
 		return
 	}
 
-	pic, err := u.userService.GetAvatar(ctx.Request.Context(), data, instance)
+	pic, err := u.userService.GetAvatar(ctx.Request.Context(), &data, instance)
 	if err != nil {
 		writeUserWAError(ctx, err)
+		return
+	}
+	if pic == nil {
+		writeUserWAError(ctx, whatsmeow.ErrProfilePictureNotSet)
 		return
 	}
 

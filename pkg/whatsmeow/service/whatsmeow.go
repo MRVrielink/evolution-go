@@ -52,6 +52,7 @@ type WhatsmeowService interface {
 	StartClient(clientData *ClientData)
 	ConnectOnStartup(clientName string)
 	StartInstance(instanceId string) error
+	StartInstanceContext(ctx context.Context, instanceId string) error
 	ReconnectClient(instanceId string) error
 	ClearInstanceCache(instanceId string, token string) error
 	CallWebhook(instance *instance_model.Instance, queueName string, jsonData []byte)
@@ -1075,6 +1076,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		postMap["data"] = dataMap
 	case *events.Message:
+		if evt == nil {
+			return
+		}
+		messageEvent := *evt
+		evt = &messageEvent
+		postMap["data"] = evt
 		doWebhook = true
 		postMap["event"] = "Message"
 		// Message received
@@ -1126,6 +1133,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		// Trata o caso especial onde Sender é @lid e SenderAlt é @s.whatsapp.net
 		// Neste caso, devemos inverter: Sender e Chat devem ser @s.whatsapp.net, SenderAlt deve ser @lid
+		decryptFailed, decryptErr := prepareIncomingMessageEdit(context.Background(), mycli.WAClient, evt)
+		if decryptErr != nil {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Could not decrypt edit %s; forwarding encrypted envelope", mycli.userID, evt.Info.ID)
+		}
 		senderStr := evt.Info.Sender.String()
 		senderAltStr := evt.Info.SenderAlt.String()
 		chatStr := evt.Info.Chat.String()
@@ -1178,12 +1189,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}()
 		}
 
-		// Edits arrive sealed in a secretEncryptedMessage envelope. Unwrap before typing the
-		// message, so it is classified as "edit" and the webhook carries the new text.
-		mycli.unwrapSecretEncryptedEdit(evt)
-
 		parsedMessageType := utils.GetMessageType(evt.Message)
-		if parsedMessageType == "ignore" || strings.HasPrefix(parsedMessageType, "unknown_protocol_") {
+		if (parsedMessageType == "ignore" || strings.HasPrefix(parsedMessageType, "unknown_protocol_")) && !evt.IsEdit {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Message ignored because it's a unknown protocol message", mycli.userID)
 			return
 		}
@@ -1212,6 +1219,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			dataMap = make(map[string]interface{})
 		}
 
+		annotateMessageAction(dataMap, evt, decryptFailed)
 		referral := extractReferralFromMessage(evt.Message)
 
 		if evt.Message.GetPollUpdateMessage() != nil {
@@ -1540,7 +1548,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		isGroup := strings.HasSuffix(evt.Info.Chat.String(), "@g.us")
-		if isGroup {
+		if isGroup && !decryptFailed && mycli.WAClient != nil && mycli.WAClient.Store != nil {
 			groupData, err := mycli.WAClient.GetGroupInfo(context.Background(), evt.Info.Chat)
 			if err == nil {
 				dataMap["groupData"] = groupData
@@ -2284,9 +2292,10 @@ func (w *whatsmeowService) sendToQueueOrWebhook(instance *instance_model.Instanc
 		err := w.websocketProducer.Produce(queueName, jsonData, instance.Id, instance.Token)
 		if err != nil {
 			w.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Failed to send message to websocket: %s", instance.Id, err)
-			return
+			// Continue independent delivery without retrying partial WS sends.
+		} else {
+			w.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Message sent to websocket successfully", instance.Id)
 		}
-		w.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Message sent to websocket successfully", instance.Id)
 	}
 
 	if instance.Webhook != "" && instance.Webhook != "disabled" {
@@ -2300,7 +2309,14 @@ func (w *whatsmeowService) sendToQueueOrWebhook(instance *instance_model.Instanc
 }
 
 func (w whatsmeowService) StartInstance(instanceId string) error {
-	instance, err := w.instanceRepository.GetInstanceByID(instanceId)
+	return w.StartInstanceContext(context.Background(), instanceId)
+}
+
+func (w whatsmeowService) StartInstanceContext(ctx context.Context, instanceId string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	instance, err := w.instanceRepository.GetInstanceByIDContext(ctx, instanceId)
 	if err != nil {
 		return err
 	}
@@ -2322,7 +2338,7 @@ func (w whatsmeowService) StartInstance(instanceId string) error {
 
 		instance.Proxy = string(proxyJSON)
 
-		err = w.instanceRepository.UpdateProxy(instance.Id, instance.Proxy)
+		err = w.instanceRepository.UpdateProxyContext(ctx, instance.Id, instance.Proxy)
 		if err != nil {
 			w.loggerWrapper.GetLogger(instanceId).LogError("[%s] Failed to update instance: %s", instanceId, err)
 			return err
@@ -2339,8 +2355,6 @@ func (w whatsmeowService) StartInstance(instanceId string) error {
 		"osName": instance.OsName,
 		"Proxy":  instance.Proxy,
 	}}
-
-	w.userInfoCache.Set(instance.Token, v, cache.NoExpiration)
 
 	eventArray := strings.Split(instance.Events, ",")
 
@@ -2360,8 +2374,6 @@ func (w whatsmeowService) StartInstance(instanceId string) error {
 
 		}
 	}
-
-	w.killChannel.Set(instance.Id, make(chan bool))
 
 	clientData := &ClientData{
 		Instance:      instance,
@@ -2383,6 +2395,11 @@ func (w whatsmeowService) StartInstance(instanceId string) error {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	w.userInfoCache.Set(instance.Token, v, cache.NoExpiration)
+	w.killChannel.Set(instance.Id, make(chan bool))
 	go w.StartClient(clientData)
 
 	return nil
